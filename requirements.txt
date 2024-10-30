@@ -4,4 +4,4 @@ langchain-core==0.3.13
 langchain-groq==0.2.0
 streamlit==1.39.0
 python-dotenv==1.0.1 
-angchain-google-genai==2.0.3
+langchain-google-genai==2.0.3
