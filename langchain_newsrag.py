@@ -1,16 +1,10 @@
 import os
 import streamlit as st
 from datetime import datetime
-from typing import List, Dict
-import requests
-from langchain_core.documents import Document
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_community.vectorstores import Chroma
-from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 import dotenv
-import re
+from collect_news import NewsCollector
+from summarize_news import NewsSummarizer, VectorStore
+from custom_news import CustomNewsRetriever
 
 __import__('pysqlite3')
 import sys
@@ -28,196 +22,7 @@ os.environ['LANGCHAIN_TRACING_V2'] = 'true'
 os.environ['LANGCHAIN_ENDPOINT'] = 'https://api.smith.langchain.com'
 os.environ['LANGCHAIN_API_KEY'] = os.getenv("LANGCHAIN_API_KEY")
 
-class NewsCollector:
-    def __init__(self):
-        self.base_url = "https://newsapi.org/v2/top-headlines"
-        self.api_key = os.getenv("NEWS_API_KEY")
-        
-    def get_news(self, country: str, category: str) -> List[Dict]:
-        params = {
-            "country": country,
-            "category": category,
-            "apiKey": self.api_key,
-            "pageSize": 5
-        }
-        response = requests.get(self.base_url, params=params)
-        return response.json()["articles"]
-    
-    def preprocess_news(self, articles: List[Dict], region: str, category: str) -> List[Document]:
-        documents = []
-        for article in articles:
-            if article['title'] != "[Removed]" and article['description'] != "[Removed]" and article['content'] != "[Removed]":
-                content = f"Title: {article['title']}\nDescription: {article['description']}\nContent: {article['content']}"
-                summary_content = f"Title: {article['title']}\nDescription: {article['description']}"
-                metadata = {
-                    "published_date": article["publishedAt"],
-                    "category": category,
-                    "region": region,
-                    "source": article["source"]["name"],
-                    "summary_content": summary_content  # Store concise version in metadata
 
-                }
-                documents.append(Document(page_content=content, metadata=metadata))
-        return documents
-
-
-class VectorStore:
-    def __init__(self):
-        self.embeddings = GoogleGenerativeAIEmbeddings(
-            model='models/text-embedding-004',
-            model_type='retrieval_document'
-        )
-        self.vectorstore = None
-    
-    def create_vectorstore(self, documents: List[Document]):
-        self.vectorstore = Chroma.from_documents(
-            documents=documents,
-            embedding=self.embeddings
-        )
-        return self.vectorstore
-
-class NewsSummarizer:
-    def __init__(self):
-        self.llm = ChatGroq(model="llama3-8b-8192")
-        
-    def summarize_news(self, documents: List[Document], current_date: str) -> str:
-        template = """Current date: {current_date}
-        Based on the following news articles and their published dates, provide a comprehensive summary of the latest news:
-        
-        {context}
-        
-        Prioritize more recent news while maintaining coherence in the summary.
-        """
-        
-        prompt = ChatPromptTemplate.from_template(template)
-        
-        chain = (
-            prompt 
-            | self.llm 
-            | StrOutputParser()
-        )
-        
-        context = "\n\n".join([
-            f"Article ({doc.metadata['published_date']}):\n{doc.metadata['summary_content']}"
-            for doc in documents
-        ])
-        
-        return chain.invoke({
-            "context": context,
-            "current_date": current_date
-        })
-    
-
-class CustomNewsRetriever:
-    def __init__(self, vectorstore):
-        self.vectorstore = vectorstore
-        self.llm = ChatGroq(model="llama3-8b-8192")
-    
-    def generate_questions(self, user_query: str) -> List[str]:
-        template = """You are an AI language model assistant. Your task is to generate 3 different sub questions OR alternate versions of the given user question to retrieve relevant documents from a vector database.
-
-        By generating multiple versions of the user question,
-        your goal is to help the user overcome some of the limitations
-        of distance-based similarity search.
-
-        By generating sub questions, you can break down questions that refer to multiple concepts into distinct questions. This will help you get the relevant documents for constructing a final answer
-
-        If multiple concepts are present in the question, you should break into sub questions, with one question for each concept
-
-        Provide these alternative questions separated by newlines between XML tags. For example:
-
-        <questions>
-        - Question 1
-        - Question 2
-        - Question 3
-        </questions>
-
-        Original question: {question}"""
-        
-        prompt = ChatPromptTemplate.from_template(template)
-        chain = prompt | self.llm | StrOutputParser()
-        result = chain.invoke({"question": user_query})
-        result = re.findall(r'- (.+\?)', result)
-        return result
-    
-    def deduplicate_docs(self, docs: List[Document]) -> List[Document]:
-        """
-        Deduplicate documents based on their content and metadata
-        """
-        unique_docs = []
-        seen_contents = set()
-        
-        for doc in docs:
-            # Create a unique identifier using content and published date
-            content_identifier = (
-                doc.page_content,
-                doc.metadata.get('published_date', '')
-            )
-            
-            if content_identifier not in seen_contents:
-                seen_contents.add(content_identifier)
-                unique_docs.append(doc)
-        
-        return unique_docs
-    
-    def get_relevant_docs(self, questions: List[str]) -> List[Document]:
-        all_docs = []
-        for question in questions:
-            docs = self.vectorstore.similarity_search(question)
-            all_docs.extend(docs)
-        
-        # Deduplicate documents
-        return self.deduplicate_docs(all_docs)
-    
-    def answer_query(self, user_query: str, docs: List[Document], current_date: str) -> str:
-        template = """Current date: {current_date}
-        Based on the following news articles and their published dates, answer this question: {question}
-        
-        Context:
-        {context}
-        
-        Provide a clear and focused answer based on the most recent and relevant information.
-        """
-        
-        prompt = ChatPromptTemplate.from_template(template)
-        chain = prompt | self.llm | StrOutputParser()
-        
-        # Use full content for detailed answers to specific queries
-        context = "\n\n".join([
-            f"Article ({doc.metadata['published_date']}):\n{doc.page_content}"
-            for doc in docs
-        ])
-        
-        return chain.invoke({
-            "context": context,
-            "question": user_query,
-            "current_date": current_date
-        })
-    
-    def answer_query(self, user_query: str, docs: List[Document], current_date: str) -> str:
-        template = """Current date: {current_date}
-        Based on the following news articles and their published dates, answer this question: {question}
-        
-        Context:
-        {context}
-        
-        Provide a clear and focused answer based on the most recent and relevant information.
-        """
-        
-        prompt = ChatPromptTemplate.from_template(template)
-        chain = prompt | self.llm | StrOutputParser()
-        
-        # Use full content for detailed answers to specific queries
-        context = "\n\n".join([
-            f"Article ({doc.metadata['published_date']}):\n{doc.page_content}"
-            for doc in docs
-        ])
-        
-        return chain.invoke({
-            "context": context,
-            "question": user_query,
-            "current_date": current_date
-        })
     
 def main():
     # Initialize session state for articles if it doesn't exist
@@ -229,6 +34,17 @@ def main():
     vector_store = VectorStore()
     news_summarizer = NewsSummarizer()
     current_date = datetime.now().strftime("%Y-%m-%d")
+
+    def format_datetime(date_str):
+        """Format datetime string to a more readable format"""
+        try:
+            # Parse the ISO format datetime string
+            dt = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%SZ")
+            # Format it to a more readable string
+            # Example output: "Oct 29, 2024 - 3:53 AM"
+            return dt.strftime("%b %d, %Y - %I:%M %p")
+        except Exception:
+            return date_str  # Return original string if parsing fails
 
 
     # Main interface
@@ -254,7 +70,7 @@ def main():
             "US election 2024 updates",
             "What is Taylor Swift up to?",
             "What's the latest news in the tech sector?",
-            "Current sports events in India",
+            "Current sports events in US",
             "Entertainment industry updates",
             "Global market trends today",
             "Recent political developments"
@@ -262,7 +78,7 @@ def main():
         st.markdown("Copy a prompt to ask your AI News Assistant:")
         st.markdown("---")
         for prompt in example_prompts:
-            st.markdown(f"• {prompt}")
+            st.markdown(f"{prompt}")
 
     # Functionality 1: Category-based News Summary
     st.header("📝 AI news summary")
@@ -338,7 +154,8 @@ def main():
                     with st.expander("Expand to view relevant articles", expanded=False):
                         st.subheader("Relevant Articles Retrieved")
                         for i, doc in enumerate(relevant_docs, 1):
-                            st.markdown(f"{i}. {doc.metadata['source']}: {doc.metadata['published_date']}")
+                            formatted_date = format_datetime(doc.metadata['published_date'])
+                            st.markdown(f"{i}. {doc.metadata['source']}: {formatted_date}")
                     
                     # Generate and display response
                     response = custom_retriever.answer_query(user_query, relevant_docs, current_date)
