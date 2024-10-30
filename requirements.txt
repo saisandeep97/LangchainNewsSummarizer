@@ -7,3 +7,4 @@ python-dotenv==1.0.1
 langchain-google-genai==2.0.3
 langchain-community==0.3.3
 protobuf==3.20.*
+pysqlite3-binary
