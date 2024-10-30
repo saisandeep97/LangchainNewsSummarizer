@@ -26,6 +26,7 @@ NewsRag is an intelligent news aggregation and analysis application that leverag
   
 - **AI/ML Components**:
   - LangChain - For orchestrating AI workflows
+  - LangSmith - For tracking LLM I/O
   - Groq - LLM provider for text generation
   - Google Generative AI - For document embeddings
   - Chroma DB - Vector store for similarity search
