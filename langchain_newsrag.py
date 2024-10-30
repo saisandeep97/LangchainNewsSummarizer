@@ -10,6 +10,10 @@ __import__('pysqlite3')
 import sys
 sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 
+import chromadb
+
+chromadb.api.client.SharedSystemClient.clear_system_cache()
+
 # Load environment variables
 
 dotenv.load_dotenv()
