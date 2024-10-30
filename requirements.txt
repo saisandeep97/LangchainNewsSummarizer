@@ -5,3 +5,4 @@ langchain-groq==0.2.0
 streamlit==1.39.0
 python-dotenv==1.0.1 
 langchain-google-genai==2.0.3
+langchain-community==0.3.3
