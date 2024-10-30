@@ -11,7 +11,6 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 import dotenv
 import re
-import chromadb.api
 
 
 # Load environment variables
@@ -228,8 +227,6 @@ def main():
     news_summarizer = NewsSummarizer()
     current_date = datetime.now().strftime("%Y-%m-%d")
 
-    # Clear ChromaDB cache
-    chromadb.api.client.SharedSystemClient.clear_system_cache()
 
     # Main interface
     st.title("NewsRag: Your AI News Assistant")
